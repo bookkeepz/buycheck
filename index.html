@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1B2A41">
+<title>Buy Check</title>
+<style>
+  :root {
+    --base: #E8ECF1;
+    --surface: #FFFFFF;
+    --ink: #16202B;
+    --muted: #5B6875;
+    --line: #CFD6DE;
+    --panel: #1B2A41;
+    --panel-ink: #F3F6FA;
+    --panel-muted: #9FB0C4;
+    --signal: #FFC145;
+    --pass: #2F9E63;
+    --fail: #D64550;
+    --wait: #C98A1A;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--base);
+    color: var(--ink);
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Inter, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.4;
+    font-variant-numeric: tabular-nums;
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  }
+  .wrap { max-width: 520px; margin: 0 auto; }
+
+  /* Readout panel: the one bold element on the page */
+  .readout {
+    position: sticky; top: 0; z-index: 2;
+    background: var(--panel); color: var(--panel-ink);
+    padding: calc(12px + env(safe-area-inset-top)) 18px 14px;
+    border-bottom-left-radius: 16px; border-bottom-right-radius: 16px;
+    box-shadow: 0 6px 18px rgba(27,42,65,.28);
+  }
+  .readout-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .brand { font-size: 13px; letter-spacing: .01em; color: var(--panel-muted); }
+  .lanes { display: flex; gap: 4px; background: rgba(255,255,255,.08); padding: 3px; border-radius: 999px; }
+  .lanes button {
+    appearance: none; border: 0; background: transparent; color: var(--panel-muted);
+    font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .lanes button[aria-pressed="true"] { background: var(--panel-ink); color: var(--panel); font-weight: 600; }
+  .lanes button:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, label:focus-within {
+    outline: 3px solid var(--signal); outline-offset: 2px;
+  }
+  .lead { margin: 14px 0 0; font-size: 15px; color: var(--panel-muted); }
+  .big {
+    margin: 0; font-size: 64px; line-height: 1; font-weight: 700; letter-spacing: -.03em;
+    color: var(--signal);
+  }
+  .big.empty { color: var(--panel-muted); font-size: 28px; font-weight: 500; letter-spacing: 0; padding: 14px 0; }
+  .sub { margin: 8px 0 0; font-size: 14px; color: var(--panel-muted); }
+  .sub b { color: var(--panel-ink); font-weight: 600; }
+  .verdict {
+    margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 15px; font-weight: 600;
+    background: rgba(255,255,255,.08); color: var(--panel-ink);
+  }
+  .verdict[data-state="buy"]  { background: var(--pass); color: #fff; }
+  .verdict[data-state="pass"] { background: var(--fail); color: #fff; }
+  .verdict[data-state="gates"]{ background: var(--wait); color: #fff; }
+
+  /* Form */
+  section { background: var(--surface); margin: 14px 12px 0; border-radius: var(--radius); padding: 14px 16px 16px; border: 1px solid var(--line); }
+  h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .row:first-of-type { border-top: 0; }
+  .row label, .row .lbl { flex: 1; font-size: 15px; }
+  .hint { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  input[type="text"], input[type="number"], select {
+    font: inherit; font-size: 17px; color: var(--ink); background: #F6F8FA; border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 10px; min-height: 42px; width: 100%;
+  }
+  .row input[type="number"], .row select { width: 128px; text-align: right; }
+  .row select { text-align: left; }
+  .comps { width: 100%; }
+  .comps-meta { font-size: 13px; color: var(--muted); margin-top: 6px; display: flex; justify-content: space-between; }
+  .switch { display: flex; align-items: center; gap: 10px; }
+  .switch input { width: 22px; height: 22px; margin: 0; accent-color: var(--panel); }
+  details summary { cursor: pointer; font-size: 15px; font-weight: 600; padding: 4px 0; list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::after { content: "  Show"; font-weight: 400; color: var(--muted); font-size: 13px; }
+  details[open] summary::after { content: "  Hide"; }
+
+  /* Gates */
+  .gate { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); cursor: pointer; }
+  .gate:first-of-type { border-top: 0; }
+  .gate input { width: 24px; height: 24px; margin: 1px 0 0; flex: none; accent-color: var(--pass); }
+  .gate span { font-size: 15px; }
+  .gate small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .actions { display: flex; gap: 10px; margin-top: 14px; }
+  .btn {
+    flex: 1; appearance: none; font: inherit; font-size: 15px; font-weight: 600; padding: 12px 14px;
+    border-radius: 8px; border: 1px solid var(--panel); background: var(--panel); color: #fff; cursor: pointer;
+  }
+  .btn.quiet { background: transparent; color: var(--panel); }
+  .toast { font-size: 13px; color: var(--muted); margin-top: 8px; min-height: 18px; }
+  .foot { margin: 16px 20px 0; font-size: 12.5px; color: var(--muted); }
+  @media (prefers-reduced-motion: no-preference) {
+    .verdict { transition: background-color .18s ease; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="readout" role="region" aria-live="polite" aria-label="Buy check result">
+    <div class="readout-top">
+      <div class="brand">Buy Check</div>
+      <div class="lanes" role="group" aria-label="Lane">
+        <button type="button" data-lane="iPad" aria-pressed="true">iPad</button>
+        <button type="button" data-lane="MacBook" aria-pressed="false">Mac</button>
+        <button type="button" data-lane="iPhone" aria-pressed="false">iPhone</button>
+        <button type="button" data-lane="PC" aria-pressed="false">PC</button>
+      </div>
+    </div>
+    <p class="lead" id="lead">Pay no more than</p>
+    <p class="big empty" id="big">Enter sold prices to start</p>
+    <p class="sub" id="sub"></p>
+    <div class="verdict" id="verdict" data-state="none">Waiting for comps</div>
+  </div>
+
+  <section aria-labelledby="h-comps">
+    <h2 id="h-comps">What it sells for</h2>
+    <label for="comps" class="hint" style="margin-bottom:6px">Recent sold prices for this exact config (Terapeak or Swappa), separated by spaces</label>
+    <input class="comps" id="comps" type="text" inputmode="decimal" autocomplete="off" placeholder="505 520 499 530 515">
+    <div class="comps-meta"><span id="comps-n">0 comps</span><span id="comps-med"></span></div>
+    <div class="row">
+      <label for="ask">Seller is asking<span class="hint">All in, including any shipping to you</span></label>
+      <input id="ask" type="number" inputmode="decimal" min="0" step="1" placeholder="0">
+    </div>
+    <div class="row">
+      <span class="lbl">Successor ships within 45 days<span class="hint">Takes 12% off the expected price</span></span>
+      <label class="switch"><input type="checkbox" id="launch"></label>
+    </div>
+    <div class="row">
+      <span class="lbl">Parts or not working unit<span class="hint">Use for-parts sold comps; shorter gate list</span></span>
+      <label class="switch"><input type="checkbox" id="parts"></label>
+    </div>
+    <div class="row">
+      <label for="channel">Sell on</label>
+      <select id="channel">
+        <option value="ebay_store">eBay, Basic Store</option>
+        <option value="ebay_nostore">eBay, no store</option>
+        <option value="swappa">Swappa</option>
+      </select>
+    </div>
+  </section>
+
+  <section>
+    <details>
+      <summary>Assumptions</summary>
+      <div class="row">
+        <label for="margin">Required margin, % of sale price<span class="hint">Rises automatically with fewer than 5 comps or a wide spread</span></label>
+        <input id="margin" type="number" inputmode="decimal" min="0" max="90" step="1" value="30">
+      </div>
+      <div class="row">
+        <label for="capital">Bankroll $<span class="hint">No single unit may cost more than 25% of it</span></label>
+        <input id="capital" type="number" inputmode="decimal" min="0" step="100" value="2500">
+      </div>
+      <div class="row">
+        <label for="ads">Promoted listing rate %<span class="hint">eBay only</span></label>
+        <input id="ads" type="number" inputmode="decimal" min="0" max="20" step="0.5" value="2">
+      </div>
+      <div class="row">
+        <label for="ship">Shipping cost to buyer $<span class="hint">Insured; preset per lane</span></label>
+        <input id="ship" type="number" inputmode="decimal" min="0" step="1">
+      </div>
+      <div class="row">
+        <label for="pack">Packaging $</label>
+        <input id="pack" type="number" inputmode="decimal" min="0" step="1">
+      </div>
+      <div class="row">
+        <label for="ret">Return rate %<span class="hint">Cost of a return is both shipping legs plus a 5% relist haircut</span></label>
+        <input id="ret" type="number" inputmode="decimal" min="0" max="50" step="1">
+      </div>
+      <div class="row">
+        <label for="tax">Buyer sales tax %<span class="hint">eBay charges its fee on the tax too</span></label>
+        <input id="tax" type="number" inputmode="decimal" min="0" max="15" step="0.5" value="7">
+      </div>
+    </details>
+  </section>
+
+  <section aria-labelledby="h-gates">
+    <h2 id="h-gates">Gates before money changes hands</h2>
+    <div id="gates"></div>
+    <div class="actions">
+      <button type="button" class="btn" id="copy">Copy summary</button>
+      <button type="button" class="btn quiet" id="reset">Clear</button>
+    </div>
+    <div class="toast" id="toast"></div>
+  </section>
+
+  <p class="foot">Fee rates verified July 2026: eBay Basic Store 7.35% for tablets and laptops (Mac and PC), 9.35% for phones, 13.6% with no store, plus $0.40 per order; Swappa about 6.49% plus $0.49. Numbers are estimates, not accounting.</p>
+</div>
+
+<script>
+  // Mirrors src/config.py and src/valuation.py. Keep the two in sync.
+  const CFG = {
+    ebayStore: { iPad: 0.0735, MacBook: 0.0735, iPhone: 0.0935, PC: 0.0735 },
+    ebayNoStore: 0.136,
+    ebayOrderFee: 0.40,
+    swappaRate: 0.0649, swappaFixed: 0.49,
+    ship: { iPad: 14, MacBook: 22, iPhone: 9, PC: 20 },
+    pack: { iPad: 3, MacBook: 5, iPhone: 2, PC: 5 },
+    ret: { iPad: 5, MacBook: 6, iPhone: 6, PC: 7 },
+    relistHaircut: 0.05, launchHaircut: 0.12, minComps: 5, minSale: 150, baseMargin: 30,
+    capital: 2500, unitShare: 0.25,
+  };
+
+  const GATES = {
+    iPhone: [
+      ["Activation Lock is off", "Seller signs out of iCloud in front of you, or setup shows no lock screen"],
+      ["IMEI is clean", "Blacklist and carrier lock checked; no financing"],
+      ["Battery health 85% or better", "Settings > Battery > Battery Health"],
+      ["No Unknown Part warnings", "Settings > General > About > Parts & Service History"],
+      ["Face ID, cameras, mics, speaker, port all work", "Enroll Face ID, record a voice memo, plug in a cable"],
+      ["About screen and IMEI photographed", "Before paying"],
+    ],
+    iPad: [
+      ["Activation Lock is off", "Same check as iPhone"],
+      ["IMEI clean if cellular", "Skip for Wi-Fi only"],
+      ["No MDM profile", "Settings > General > VPN & Device Management"],
+      ["Full-panel touch test, no stains at max brightness", "Draw across the whole screen in Notes"],
+      ["Battery verified or priced as 85%", "Battery Health where shown; coconutBattery otherwise"],
+      ["Model and storage match About and the A-number on the back", "Settings > General > About"],
+    ],
+    PC: [
+      ["No BIOS or supervisor password", "F1/F2/F12 at boot; a locked BIOS is a board-level job"],
+      ["Absolute (Computrace) not Activated in BIOS", "Disabled or Deactivated is fine"],
+      ["No Autopilot or Intune enrollment after reset", "Setup with Wi-Fi on; a Welcome to [Company] screen means walk"],
+      ["No BitLocker prompt; Windows activates after reset", "Settings > System > Activation"],
+      ["Specs match: CPU gen, RAM, SSD; 11th gen Intel or Ryzen 5000+", "Settings > System > About"],
+      ["Battery report, hinges, keys, ports, screen, fans", "powercfg /batteryreport; over 80% of design capacity is excellent"],
+    ],
+    MacBook: [
+      ["No Remote Management screen after erase", "Enrolled in Apple Business or School Manager cannot be cleared"],
+      ["Activation Lock off, Find My Mac disabled", "Recovery must not ask for the previous owner's Apple ID"],
+      ["About This Mac matches: chip, RAM, SSD, year", ""],
+      ["Cycle count checked (laptops)", "System Information > Power; over 800 means a battery service is coming"],
+      ["Keys and trackpad (laptops), every port, display, speakers", "Mac mini: HDMI out, Ethernet, fan, power cord included"],
+      ["No liquid damage; serial checked at checkcoverage.apple.com", "Corrosion at ports, warped case, sticky keys"],
+    ],
+  };
+
+  // Shorter gate list for cracked and not-working units. Comps must be for-parts comps.
+  const PARTS_GATES = {
+    iPhone: [
+      ["Activation Lock is off", "A locked broken unit is worth almost nothing"],
+      ["IMEI is clean", "Blacklisted units are not sold, even for parts"],
+      ["Defect exactly known and photographed", "Cracked, no power, no display, water"],
+      ["Buyback quote captured as the floor", "ItsWorthMore quote before paying"],
+    ],
+    iPad: [
+      ["Activation Lock is off", ""],
+      ["IMEI clean if cellular", ""],
+      ["Defect exactly known and photographed", ""],
+      ["Buyback quote captured as the floor", ""],
+    ],
+    MacBook: [
+      ["No Remote Management screen, Activation Lock off", "If it boots far enough to check; otherwise price as locked"],
+      ["Defect exactly known and photographed", "Board, display, liquid, keyboard"],
+      ["Buyback quote captured as the floor", ""],
+    ],
+    PC: [
+      ["No BIOS password, no Autopilot enrollment", "If it boots; otherwise price as locked"],
+      ["Defect exactly known and photographed", ""],
+      ["Parts value checked: screen, board, RAM, SSD", ""],
+    ],
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const state = { lane: "iPad", gates: {} };
+  const money = (n) => "$" + Math.round(n).toLocaleString("en-US");
+
+  function median(a) { const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+  function pstdev(a) { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / a.length); }
+
+  function parseComps() {
+    return ($("comps").value.match(/\d+(?:\.\d+)?/g) || []).map(Number).filter((x) => x > 0);
+  }
+
+  // Required margin is a share of the sale price. Mirrors valuation.required_margin.
+  function requiredMargin(comps, base) {
+    let m = base;
+    if (comps.length < CFG.minComps) m += 3;
+    if (comps.length >= 2) { const cv = pstdev(comps) / median(comps); if (cv > 0.10) m += Math.min(6, (cv - 0.10) * 30); }
+    return m;
+  }
+
+  function feeRate(lane) {
+    const ch = $("channel").value, tax = (+$("tax").value || 0) / 100, ads = (+$("ads").value || 0) / 100;
+    if (ch === "swappa") return { pct: CFG.swappaRate, fixed: CFG.swappaFixed };
+    const base = ch === "ebay_store" ? CFG.ebayStore[lane] : CFG.ebayNoStore;
+    return { pct: base * (1 + tax) + ads, fixed: CFG.ebayOrderFee };
+  }
+
+  function netAt(price, lane) {
+    const f = feeRate(lane), ship = +$("ship").value || 0, pack = +$("pack").value || 0, rr = (+$("ret").value || 0) / 100;
+    const fees = price * f.pct + f.fixed;
+    const retLoss = rr * (2 * ship + CFG.relistHaircut * price);
+    return { fees, retLoss, net: price - fees - ship - pack - retLoss };
+  }
+
+  function setLane(lane) {
+    state.lane = lane;
+    document.querySelectorAll(".lanes button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lane === lane)));
+    $("ship").value = CFG.ship[lane]; $("pack").value = CFG.pack[lane]; $("ret").value = CFG.ret[lane];
+    renderGates(); compute();
+  }
+
+  function activeGates() { return ($("parts").checked ? PARTS_GATES : GATES)[state.lane]; }
+
+  function renderGates() {
+    const box = $("gates"); box.innerHTML = "";
+    state.gates = {};
+    activeGates().forEach(([t, h], i) => {
+      const id = "g" + i;
+      const lab = document.createElement("label"); lab.className = "gate"; lab.htmlFor = id;
+      lab.innerHTML = `<input type="checkbox" id="${id}"><span>${t}${h ? `<small>${h}</small>` : ""}</span>`;
+      lab.querySelector("input").addEventListener("change", (e) => { state.gates[id] = e.target.checked; compute(); });
+      box.appendChild(lab);
+    });
+  }
+
+  function compute() {
+    const comps = parseComps(), lane = state.lane, ask = +$("ask").value || 0;
+    $("comps-n").textContent = `${comps.length} comp${comps.length === 1 ? "" : "s"}${comps.length && comps.length < CFG.minComps ? " (need 5 for the base ROI)" : ""}`;
+    $("comps-med").textContent = comps.length ? "median " + money(median(comps)) : "";
+    const big = $("big"), sub = $("sub"), v = $("verdict");
+    if (!comps.length) {
+      big.className = "big empty"; big.textContent = "Enter sold prices to start"; sub.textContent = ""; $("lead").textContent = "Pay no more than";
+      v.dataset.state = "none"; v.textContent = "Waiting for comps"; return;
+    }
+    const launch = $("launch").checked;
+    const expected = median(comps) * (launch ? 1 - CFG.launchHaircut : 1);
+    const margin = requiredMargin(comps, +$("margin").value || CFG.baseMargin);
+    const n = netAt(expected, lane);
+    const maxBuy = n.net - (margin / 100) * expected;
+    big.className = "big"; big.textContent = money(Math.max(0, maxBuy));
+    $("lead").textContent = "Pay no more than";
+    sub.innerHTML = `Expected sale <b>${money(expected)}</b>${launch ? " after launch haircut" : ""}, net after fees and returns <b>${money(n.net)}</b>, required margin <b>${margin.toFixed(0)}%</b> of sale price`;
+    const gatesDone = activeGates().every((_, i) => state.gates["g" + i]);
+    if (expected < CFG.minSale) { v.dataset.state = "pass"; v.textContent = `Pass: sells under ${money(CFG.minSale)}, fixed costs eat it`; return; }
+    if (!ask) { v.dataset.state = "none"; v.textContent = "Enter the asking price"; return; }
+    const profit = n.net - ask, mAtAsk = profit / expected * 100, roiAtAsk = profit / ask * 100;
+    const cap = (+$("capital").value || CFG.capital) * CFG.unitShare;
+    if (ask > cap) { v.dataset.state = "pass"; v.textContent = `Pass: ${money(ask)} is over the ${money(cap)} single-unit cap for a ${money(+$("capital").value || CFG.capital)} bankroll`; return; }
+    if (ask > maxBuy) { v.dataset.state = "pass"; v.textContent = `Pass at ${money(ask)}: ${money(profit)} profit is ${mAtAsk.toFixed(0)}% of sale price. Offer ${money(maxBuy)} or walk`; return; }
+    if (!gatesDone) { v.dataset.state = "gates"; v.textContent = `Number works: ${money(profit)} profit, ${mAtAsk.toFixed(0)}% of sale price (${roiAtAsk.toFixed(0)}% on cost). Finish the gates`; return; }
+    v.dataset.state = "buy"; v.textContent = `Buy at ${money(ask)}: ${money(profit)} profit, ${mAtAsk.toFixed(0)}% of sale price (${roiAtAsk.toFixed(0)}% on cost)`;
+  }
+
+  function summary() {
+    const comps = parseComps(); if (!comps.length) return "";
+    const lane = state.lane, ask = +$("ask").value || 0, launch = $("launch").checked;
+    const expected = median(comps) * (launch ? 1 - CFG.launchHaircut : 1);
+    const margin = requiredMargin(comps, +$("margin").value || CFG.baseMargin), n = netAt(expected, lane), maxBuy = n.net - (margin / 100) * expected;
+    const gates = activeGates().map((g, i) => (state.gates["g" + i] ? "✓ " : "✗ ") + g[0]).join("; ");
+    return [`${lane}${$("parts").checked ? " (parts)" : ""} | ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
+            `comps n=${comps.length} median ${money(median(comps))}${launch ? " (launch haircut)" : ""}`,
+            `expected ${money(expected)} | net ${money(n.net)} | required margin ${margin.toFixed(0)}% of sale | MAX BUY ${money(maxBuy)} (${(maxBuy / expected * 100).toFixed(0)}% of sale)`,
+            ask ? `ask ${money(ask)} | profit ${money(n.net - ask)} | margin ${((n.net - ask) / expected * 100).toFixed(0)}% of sale | ROI on cost ${((n.net - ask) / ask * 100).toFixed(0)}%` : "ask: not entered",
+            `channel ${$("channel").options[$("channel").selectedIndex].text}`,
+            `gates: ${gates}`].join("\n");
+  }
+
+  async function copySummary() {
+    const s = summary(); const t = $("toast");
+    if (!s) { t.textContent = "Nothing to copy yet"; return; }
+    try { await navigator.clipboard.writeText(s); t.textContent = "Copied. Paste into the Deals or Inventory row"; }
+    catch { const ta = document.createElement("textarea"); ta.value = s; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); t.textContent = "Copied"; }
+  }
+
+  document.querySelectorAll(".lanes button").forEach((b) => b.addEventListener("click", () => setLane(b.dataset.lane)));
+  ["comps", "ask", "margin", "ads", "ship", "pack", "ret", "tax", "capital"].forEach((id) => $(id).addEventListener("input", compute));
+  ["launch", "channel"].forEach((id) => $(id).addEventListener("change", compute));
+  $("parts").addEventListener("change", () => { renderGates(); compute(); });
+  $("copy").addEventListener("click", copySummary);
+  $("reset").addEventListener("click", () => { $("comps").value = ""; $("ask").value = ""; $("launch").checked = false; $("parts").checked = false; $("toast").textContent = ""; setLane(state.lane); });
+  setLane("iPad");
+</script>
+</body>
+</html>
