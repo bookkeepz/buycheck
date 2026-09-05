@@ -193,7 +193,28 @@
     </details>
   </section>
 
-  <section aria-labelledby="h-gates">
+  <section aria-labelledby="h-params">
+    <details>
+      <summary>Learned rules (params.json)</summary>
+      <label for="params" class="hint" style="margin:8px 0 6px">Paste <code>data/params.json</code> from the repo. It raises the required margin for a family and the return rate for a source when the learn loop has enough sales; it never lowers either.</label>
+      <textarea id="params" rows="3" spellcheck="false" autocomplete="off" style="width:100%;font:12px ui-monospace,monospace" placeholder='{"version": "2026-09-14-1", "target_margin": {...}, "return_rate": {...}, "stale": {...}}'></textarea>
+      <div class="row">
+        <label for="family">Family<span class="hint">Catalog name, e.g. iPad Air M2 11</span></label>
+        <input id="family" type="text" autocomplete="off" placeholder="iPad Air M2 11">
+      </div>
+      <div class="row">
+        <label for="source">Source</label>
+        <select id="source">
+          <option>eBay</option><option>Facebook Marketplace</option><option>OfferUp</option><option>Best Buy Open Box</option>
+          <option>Amazon Warehouse</option><option>Micro Center</option><option>Swappa</option><option>GovDeals</option>
+          <option>Public Surplus</option><option>Estate sale</option><option>Other</option>
+        </select>
+      </div>
+      <div class="toast" id="params-note"></div>
+    </details>
+  </section>
+
+  <section aria-labelledby="h-gates">  <section aria-labelledby="h-gates">
     <h2 id="h-gates">Gates before money changes hands</h2>
     <div id="gates"></div>
     <div class="actions">
@@ -203,22 +224,75 @@
     <div class="toast" id="toast"></div>
   </section>
 
-  <p class="foot">Fee rates verified July 2026: eBay Basic Store 7.35% for tablets and laptops (Mac and PC), 9.35% for phones, 13.6% with no store, plus $0.40 per order; Swappa about 6.49% plus $0.49. Numbers are estimates, not accounting.</p>
+  <p class="foot">Fee rates verified 2026-09-05: eBay Basic Store 7.35% for tablets and laptops (Mac and PC), 9.35% for phones, 13.6% with no store, plus $0.40 per order; Swappa about 6.49% plus $0.49. Numbers are estimates, not accounting.</p>
 </div>
 
 <script>
-  // Mirrors src/config.py and src/valuation.py. Keep the two in sync.
+  // RULE START
+  // Pure pricing rule. Mirrors src/config.py and src/valuation.py in bookkeepz/apple-arb; that repo's
+  // tests/test_buycheck_parity.py runs this block with node and must match evaluate() to the cent.
+  // No DOM access between the markers.
   const CFG = {
     ebayStore: { iPad: 0.0735, MacBook: 0.0735, iPhone: 0.0935, PC: 0.0735 },
     ebayNoStore: 0.136,
     ebayOrderFee: 0.40,
     swappaRate: 0.0649, swappaFixed: 0.49,
+    adRate: 0.02, buyerTax: 0.07,
     ship: { iPad: 14, MacBook: 22, iPhone: 9, PC: 20 },
     pack: { iPad: 3, MacBook: 5, iPhone: 2, PC: 5 },
     ret: { iPad: 5, MacBook: 6, iPhone: 6, PC: 7 },
     relistHaircut: 0.05, launchHaircut: 0.12, minComps: 5, minSale: 150, baseMargin: 30,
     capital: 2500, unitShare: 0.25,
   };
+
+  function median(a) { const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+  function pstdev(a) { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / a.length); }
+
+  // Python's round(): nearest, ties to even, on the exact binary value. toFixed(60) is that exact expansion here.
+  function pyround(x, d) {
+    if (!Number.isFinite(x)) return x;
+    const neg = x < 0, parts = Math.abs(x).toFixed(60).split(".");
+    const keep = parts[1].slice(0, d), rest = parts[1].slice(d);
+    let n = BigInt(parts[0] + keep);
+    const first = rest[0] || "0", tailHasDigit = /[1-9]/.test(rest.slice(1));
+    if (first > "5" || (first === "5" && tailHasDigit) || (first === "5" && !tailHasDigit && n % 2n === 1n)) n += 1n;
+    const str = n.toString().padStart(d + 1, "0");
+    const out = Number(d ? str.slice(0, -d) + "." + str.slice(-d) : str);
+    return neg ? -out : out;
+  }
+
+  // rule(input) -> the same fields as valuation.evaluate. Fractions in, fractions out (0.30 not 30).
+  // input: comps[], ask, lane, channel ("ebay"|"swappa"), store, adRate, buyerTax, shipCost, packaging,
+  //        returnRate, targetMargin, launchSoon, capital
+  function rule(i) {
+    const comps = i.comps || []; if (!comps.length) return null;
+    const lane = i.lane, swappa = i.channel === "swappa", store = i.store !== false;
+    const adRate = i.adRate ?? CFG.adRate, buyerTax = i.buyerTax ?? CFG.buyerTax;
+    const ship = i.shipCost ?? CFG.ship[lane], pack = i.packaging ?? CFG.pack[lane];
+    const rr = i.returnRate ?? CFG.ret[lane] / 100, target = i.targetMargin ?? CFG.baseMargin / 100;
+    const cap = (i.capital ?? CFG.capital) * CFG.unitShare;
+    let pct, fixed;
+    if (swappa) { pct = CFG.swappaRate; fixed = CFG.swappaFixed; }
+    else { pct = (store ? CFG.ebayStore[lane] : CFG.ebayNoStore) * (1 + buyerTax) + adRate; fixed = CFG.ebayOrderFee; }
+    const price = median(comps) * (i.launchSoon ? 1 - CFG.launchHaircut : 1);
+    let m = target;
+    if (comps.length < CFG.minComps) m += 0.03;
+    if (comps.length >= 2) { const cv = pstdev(comps) / median(comps); if (cv > 0.10) m += Math.min(0.06, (cv - 0.10) * 0.3); }
+    m = pyround(m, 4);
+    const fees = price * pct + fixed;
+    const retLoss = rr * (2 * ship + CFG.relistHaircut * price);
+    const net = pyround(price - fees - ship - pack - retLoss, 2);
+    const maxBuy = pyround(net - m * price, 2);
+    const ask = i.ask || 0, profit = net - ask;
+    return {
+      expected_price: pyround(price, 2), required_margin: m, max_buy: maxBuy, max_buy_pct_of_price: pyround(maxBuy / price, 4),
+      fees: pyround(fees, 2), shipping: ship, packaging: pack, expected_return_loss: pyround(retLoss, 2), net_proceeds: net,
+      ask, cap, within_cap: ask <= cap, buy: ask <= maxBuy && price >= CFG.minSale && ask <= cap,
+      expected_profit_at_ask: pyround(profit, 2), margin_at_ask: pyround(profit / price, 4),
+      roi_on_cost_at_ask: ask ? pyround(profit / ask, 4) : null,
+    };
+  }
+  // RULE END
 
   const GATES = {
     iPhone: [
@@ -285,40 +359,11 @@
   const state = { lane: "iPad", gates: {} };
   const money = (n) => "$" + Math.round(n).toLocaleString("en-US");
 
-  function median(a) { const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
-  function pstdev(a) { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / a.length); }
-
-  function parseComps() {
-    return ($("comps").value.match(/\d+(?:\.\d+)?/g) || []).map(Number).filter((x) => x > 0);
-  }
-
-  // Required margin is a share of the sale price. Mirrors valuation.required_margin.
-  function requiredMargin(comps, base) {
-    let m = base;
-    if (comps.length < CFG.minComps) m += 3;
-    if (comps.length >= 2) { const cv = pstdev(comps) / median(comps); if (cv > 0.10) m += Math.min(6, (cv - 0.10) * 30); }
-    return m;
-  }
-
-  function feeRate(lane) {
-    const ch = $("channel").value, tax = (+$("tax").value || 0) / 100, ads = (+$("ads").value || 0) / 100;
-    if (ch === "swappa") return { pct: CFG.swappaRate, fixed: CFG.swappaFixed };
-    const base = ch === "ebay_store" ? CFG.ebayStore[lane] : CFG.ebayNoStore;
-    return { pct: base * (1 + tax) + ads, fixed: CFG.ebayOrderFee };
-  }
-
-  function netAt(price, lane) {
-    const f = feeRate(lane), ship = +$("ship").value || 0, pack = +$("pack").value || 0, rr = (+$("ret").value || 0) / 100;
-    const fees = price * f.pct + f.fixed;
-    const retLoss = rr * (2 * ship + CFG.relistHaircut * price);
-    return { fees, retLoss, net: price - fees - ship - pack - retLoss };
-  }
-
   function setLane(lane) {
     state.lane = lane;
     document.querySelectorAll(".lanes button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lane === lane)));
     $("ship").value = CFG.ship[lane]; $("pack").value = CFG.pack[lane]; $("ret").value = CFG.ret[lane];
-    renderGates(); compute();
+    renderGates(); applyParams();
   }
 
   function activeGates() { return ($("parts").checked ? PARTS_GATES : GATES)[state.lane]; }
@@ -335,45 +380,75 @@
     });
   }
 
+  // Learned rules pasted from data/params.json (ADR-106). Mirrors src/params.py: values only raise the bar.
+  const paramsState = { data: null, error: "" };
+  function readParams() {
+    const raw = $("params").value.trim(); paramsState.data = null; paramsState.error = "";
+    if (!raw) return;
+    try { const d = JSON.parse(raw); if (!d || typeof d !== "object" || Array.isArray(d)) throw new Error("not an object"); paramsState.data = d; }
+    catch (e) { paramsState.error = "params.json did not parse: " + e.message; }
+  }
+  function applyParams() {
+    readParams();
+    const d = paramsState.data, lane = state.lane, fam = $("family").value.trim(), src = $("source").value;
+    let note = paramsState.error;
+    if (d) {
+      const tm = ((d.target_margin || {})[lane] || {})[fam], rr = ((d.return_rate || {})[lane] || {})[src];
+      $("margin").value = tm != null ? Math.max(CFG.baseMargin, +(tm * 100).toFixed(2)) : CFG.baseMargin;
+      $("ret").value = rr != null ? Math.max(CFG.ret[lane], +(rr * 100).toFixed(2)) : CFG.ret[lane];
+      note = `params ${d.version || "unversioned"}: margin ${$("margin").value}% (${tm != null ? "learned" : fam ? "no rule for " + fam : "enter the family"}), return ${$("ret").value}% (${rr != null ? "learned for " + src : "lane default"})`;
+    }
+    $("params-note").textContent = note; compute();
+  }
+  function paramsVersion() { return paramsState.data ? (paramsState.data.version || "unversioned") : ""; }
+  function isStale() {
+    const d = paramsState.data, fam = $("family").value.trim();
+    return !!(d && fam && (((d.stale || {})[state.lane]) || []).includes(fam));
+  }
+
+  function ruleInput() {
+    const ch = $("channel").value;
+    return { comps: parseComps(), ask: +$("ask").value || 0, lane: state.lane,
+             channel: ch === "swappa" ? "swappa" : "ebay", store: ch === "ebay_store",
+             adRate: (+$("ads").value || 0) / 100, buyerTax: (+$("tax").value || 0) / 100,
+             shipCost: +$("ship").value || 0, packaging: +$("pack").value || 0, returnRate: (+$("ret").value || 0) / 100,
+             targetMargin: (+$("margin").value || CFG.baseMargin) / 100, launchSoon: $("launch").checked,
+             capital: +$("capital").value || CFG.capital };
+  }
+
   function compute() {
-    const comps = parseComps(), lane = state.lane, ask = +$("ask").value || 0;
-    $("comps-n").textContent = `${comps.length} comp${comps.length === 1 ? "" : "s"}${comps.length && comps.length < CFG.minComps ? " (need 5 for the base ROI)" : ""}`;
+    const inp = ruleInput(), comps = inp.comps, ask = inp.ask;
+    $("comps-n").textContent = `${comps.length} comp${comps.length === 1 ? "" : "s"}${comps.length && comps.length < CFG.minComps ? " (need 5 for the base margin)" : ""}`;
     $("comps-med").textContent = comps.length ? "median " + money(median(comps)) : "";
     const big = $("big"), sub = $("sub"), v = $("verdict");
     if (!comps.length) {
       big.className = "big empty"; big.textContent = "Enter sold prices to start"; sub.textContent = ""; $("lead").textContent = "Pay no more than";
       v.dataset.state = "none"; v.textContent = "Waiting for comps"; return;
     }
-    const launch = $("launch").checked;
-    const expected = median(comps) * (launch ? 1 - CFG.launchHaircut : 1);
-    const margin = requiredMargin(comps, +$("margin").value || CFG.baseMargin);
-    const n = netAt(expected, lane);
-    const maxBuy = n.net - (margin / 100) * expected;
+    const r = rule(inp), expected = r.expected_price, maxBuy = r.max_buy, marginPct = r.required_margin * 100;
     big.className = "big"; big.textContent = money(Math.max(0, maxBuy));
     $("lead").textContent = "Pay no more than";
-    sub.innerHTML = `Expected sale <b>${money(expected)}</b>${launch ? " after launch haircut" : ""}, net after fees and returns <b>${money(n.net)}</b>, required margin <b>${margin.toFixed(0)}%</b> of sale price`;
+    sub.innerHTML = `Expected sale <b>${money(expected)}</b>${inp.launchSoon ? " after launch haircut" : ""}, net after fees and returns <b>${money(r.net_proceeds)}</b>, required margin <b>${marginPct.toFixed(0)}%</b> of sale price${paramsVersion() ? ` (params ${paramsVersion()})` : ""}`;
     const gatesDone = activeGates().every((_, i) => state.gates["g" + i]);
     if (expected < CFG.minSale) { v.dataset.state = "pass"; v.textContent = `Pass: sells under ${money(CFG.minSale)}, fixed costs eat it`; return; }
     if (!ask) { v.dataset.state = "none"; v.textContent = "Enter the asking price"; return; }
-    const profit = n.net - ask, mAtAsk = profit / expected * 100, roiAtAsk = profit / ask * 100;
-    const cap = (+$("capital").value || CFG.capital) * CFG.unitShare;
-    if (ask > cap) { v.dataset.state = "pass"; v.textContent = `Pass: ${money(ask)} is over the ${money(cap)} single-unit cap for a ${money(+$("capital").value || CFG.capital)} bankroll`; return; }
+    const profit = r.expected_profit_at_ask, mAtAsk = r.margin_at_ask * 100, roiAtAsk = (r.roi_on_cost_at_ask || 0) * 100;
+    if (!r.within_cap) { v.dataset.state = "pass"; v.textContent = `Pass: ${money(ask)} is over the ${money(r.cap)} single-unit cap for a ${money(inp.capital)} bankroll`; return; }
     if (ask > maxBuy) { v.dataset.state = "pass"; v.textContent = `Pass at ${money(ask)}: ${money(profit)} profit is ${mAtAsk.toFixed(0)}% of sale price. Offer ${money(maxBuy)} or walk`; return; }
+    if (isStale()) { v.dataset.state = "gates"; v.textContent = `Need review: ${$("family").value.trim()} is on the stale list (slow to sell). ${money(profit)} profit, ${mAtAsk.toFixed(0)}% of sale price. Buy only with an exit plan`; return; }
     if (!gatesDone) { v.dataset.state = "gates"; v.textContent = `Number works: ${money(profit)} profit, ${mAtAsk.toFixed(0)}% of sale price (${roiAtAsk.toFixed(0)}% on cost). Finish the gates`; return; }
     v.dataset.state = "buy"; v.textContent = `Buy at ${money(ask)}: ${money(profit)} profit, ${mAtAsk.toFixed(0)}% of sale price (${roiAtAsk.toFixed(0)}% on cost)`;
   }
 
   function summary() {
-    const comps = parseComps(); if (!comps.length) return "";
-    const lane = state.lane, ask = +$("ask").value || 0, launch = $("launch").checked;
-    const expected = median(comps) * (launch ? 1 - CFG.launchHaircut : 1);
-    const margin = requiredMargin(comps, +$("margin").value || CFG.baseMargin), n = netAt(expected, lane), maxBuy = n.net - (margin / 100) * expected;
+    const inp = ruleInput(), comps = inp.comps; if (!comps.length) return "";
+    const r = rule(inp), ask = inp.ask, lane = state.lane;
     const gates = activeGates().map((g, i) => (state.gates["g" + i] ? "✓ " : "✗ ") + g[0]).join("; ");
-    return [`${lane}${$("parts").checked ? " (parts)" : ""} | ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
-            `comps n=${comps.length} median ${money(median(comps))}${launch ? " (launch haircut)" : ""}`,
-            `expected ${money(expected)} | net ${money(n.net)} | required margin ${margin.toFixed(0)}% of sale | MAX BUY ${money(maxBuy)} (${(maxBuy / expected * 100).toFixed(0)}% of sale)`,
-            ask ? `ask ${money(ask)} | profit ${money(n.net - ask)} | margin ${((n.net - ask) / expected * 100).toFixed(0)}% of sale | ROI on cost ${((n.net - ask) / ask * 100).toFixed(0)}%` : "ask: not entered",
-            `channel ${$("channel").options[$("channel").selectedIndex].text}`,
+    return [`${lane}${$("parts").checked ? " (parts)" : ""} | ${new Date().toISOString().slice(0, 16).replace("T", " ")}${$("family").value.trim() ? " | " + $("family").value.trim() : ""}`,
+            `comps n=${comps.length} median ${money(median(comps))}${inp.launchSoon ? " (launch haircut)" : ""}`,
+            `expected ${money(r.expected_price)} | net ${money(r.net_proceeds)} | required margin ${(r.required_margin * 100).toFixed(0)}% of sale | MAX BUY ${money(r.max_buy)} (${(r.max_buy_pct_of_price * 100).toFixed(0)}% of sale)`,
+            ask ? `ask ${money(ask)} | profit ${money(r.expected_profit_at_ask)} | margin ${(r.margin_at_ask * 100).toFixed(0)}% of sale | ROI on cost ${((r.roi_on_cost_at_ask || 0) * 100).toFixed(0)}%` : "ask: not entered",
+            `channel ${$("channel").options[$("channel").selectedIndex].text}${paramsVersion() ? ` | params ${paramsVersion()}` : ""}${isStale() ? " | NEED REVIEW (stale family)" : ""}`,
             `gates: ${gates}`].join("\n");
   }
 
@@ -387,6 +462,9 @@
   document.querySelectorAll(".lanes button").forEach((b) => b.addEventListener("click", () => setLane(b.dataset.lane)));
   ["comps", "ask", "margin", "ads", "ship", "pack", "ret", "tax", "capital"].forEach((id) => $(id).addEventListener("input", compute));
   ["launch", "channel"].forEach((id) => $(id).addEventListener("change", compute));
+  $("params").addEventListener("input", applyParams);
+  $("family").addEventListener("input", applyParams);
+  $("source").addEventListener("change", applyParams);
   $("parts").addEventListener("change", () => { renderGates(); compute(); });
   $("copy").addEventListener("click", copySummary);
   $("reset").addEventListener("click", () => { $("comps").value = ""; $("ask").value = ""; $("launch").checked = false; $("parts").checked = false; $("toast").textContent = ""; setLane(state.lane); });
