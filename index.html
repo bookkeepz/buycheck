@@ -76,6 +76,7 @@
   section { background: var(--surface); margin: 14px 12px 0; border-radius: var(--radius); padding: 14px 16px 16px; border: 1px solid var(--line); }
   h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+  [hidden] { display: none !important; }  /* the "Ships as" row on a lane with no profile: .row would outrank it */
   .row:first-of-type { border-top: 0; }
   .row label, .row .lbl { flex: 1; font-size: 15px; }
   .hint { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
@@ -428,13 +429,15 @@
     const plain = { PC: "a laptop", MacBook: "a MacBook or Mac mini", Console: "a PS5 or Xbox" }[lane] || "its lane";
     sel.innerHTML = `<option value="">${plain}</option>` + mine.map((k) => `<option value="${k}">${k}</option>`).join("");
     $("profile-row").hidden = !mine.length;
+    renderGates();
     setProfile();
   }
-  // The family's shipping, packing and return rate (ADR-245), then any learned rule on top of them.
+  // The family's shipping, packing and return rate (ADR-245), then any learned rule on top of them. The gates are the
+  // lane's whatever the profile, so changing it keeps the boxes already ticked.
   function setProfile() {
     const c = laneCosts(state.lane, $("profile").value);
     $("ship").value = c.ship; $("pack").value = c.pack; $("ret").value = c.ret;
-    renderGates(); applyParams();
+    applyParams();
   }
 
   function activeGates() { return ($("parts").checked ? PARTS_GATES : GATES)[state.lane]; }
