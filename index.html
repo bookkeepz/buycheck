@@ -406,6 +406,18 @@
     return !!(d && fam && (((d.stale || {})[state.lane]) || []).includes(fam));
   }
 
+  // The comps field: sold prices separated by spaces, commas or semicolons. "$1,099" and "12,500.50" read as one
+  // price (one thousands comma after one or two digits); "505,520" is two; anything not a positive number is skipped.
+  function parseComps() {
+    const out = [];
+    for (const tok of ($("comps").value || "").split(/[\s;]+/)) {
+      const t = tok.replace(/\$/g, "");
+      const parts = /^\d{1,2},\d{3}(\.\d+)?$/.test(t) ? [t.replace(/,/g, "")] : t.split(",");
+      for (const x of parts) if (/^\d+(\.\d+)?$/.test(x) && +x > 0) out.push(+x);
+    }
+    return out;
+  }
+
   function ruleInput() {
     const ch = $("channel").value;
     return { comps: parseComps(), ask: +$("ask").value || 0, lane: state.lane,
