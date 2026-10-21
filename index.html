@@ -45,9 +45,9 @@
     border-bottom-left-radius: 16px; border-bottom-right-radius: 16px;
     box-shadow: 0 6px 18px rgba(27,42,65,.28);
   }
-  .readout-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .readout-top { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; }
   .brand { font-size: 13px; letter-spacing: .01em; color: var(--panel-muted); }
-  .lanes { display: flex; gap: 4px; background: rgba(255,255,255,.08); padding: 3px; border-radius: 999px; }
+  .lanes { display: flex; flex-wrap: wrap; gap: 4px; background: rgba(255,255,255,.08); padding: 3px; border-radius: 16px; }
   .lanes button {
     appearance: none; border: 0; background: transparent; color: var(--panel-muted);
     font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 999px; cursor: pointer;
@@ -76,6 +76,7 @@
   section { background: var(--surface); margin: 14px 12px 0; border-radius: var(--radius); padding: 14px 16px 16px; border: 1px solid var(--line); }
   h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+  [hidden] { display: none !important; }  /* the "Ships as" row on a lane with no profile: .row would outrank it */
   .row:first-of-type { border-top: 0; }
   .row label, .row .lbl { flex: 1; font-size: 15px; }
   .hint { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
@@ -124,6 +125,9 @@
         <button type="button" data-lane="MacBook" aria-pressed="false">Mac</button>
         <button type="button" data-lane="iPhone" aria-pressed="false">iPhone</button>
         <button type="button" data-lane="PC" aria-pressed="false">PC</button>
+        <button type="button" data-lane="Android" aria-pressed="false">Galaxy</button>
+        <button type="button" data-lane="Console" aria-pressed="false">Console</button>
+        <button type="button" data-lane="Watch" aria-pressed="false">Watch</button>
       </div>
     </div>
     <p class="lead" id="lead">Pay no more than</p>
@@ -156,6 +160,10 @@
         <option value="ebay_nostore" selected>eBay, no store</option>
         <option value="swappa">Swappa</option>
       </select>
+    </div>
+    <div class="row" id="profile-row">
+      <label for="profile">Ships as<span class="hint">A gaming laptop, mini PC, Switch or Mac desktop ships and returns unlike its lane</span></label>
+      <select id="profile"></select>
     </div>
   </section>
 
@@ -233,14 +241,24 @@
   // tests/test_buycheck_parity.py runs this block with node and must match evaluate() to the cent.
   // No DOM access between the markers.
   const CFG = {
-    ebayStore: { iPad: 0.0735, MacBook: 0.0735, iPhone: 0.0935, PC: 0.0735 },
+    ebayStore: { iPad: 0.0735, MacBook: 0.0735, iPhone: 0.0935, PC: 0.0735, Android: 0.0935, Console: 0.0735, Watch: 0.0935 },
     ebayNoStore: 0.136,
     ebayOrderFee: 0.40,
     swappaRate: 0.0649, swappaFixed: 0.49,
     adRate: 0.02, buyerTax: 0.07,
-    ship: { iPad: 14, MacBook: 22, iPhone: 9, PC: 20 },
-    pack: { iPad: 3, MacBook: 5, iPhone: 2, PC: 5 },
-    ret: { iPad: 5, MacBook: 6, iPhone: 6, PC: 7 },
+    ship: { iPad: 14, MacBook: 22, iPhone: 9, PC: 20, Android: 9, Console: 28, Watch: 8 },
+    pack: { iPad: 3, MacBook: 5, iPhone: 2, PC: 5, Android: 2, Console: 6, Watch: 2 },
+    ret: { iPad: 5, MacBook: 6, iPhone: 6, PC: 7, Android: 7, Console: 6, Watch: 7 },
+    // Families that ship unlike their lane (config.COST_PROFILES, ADR-245): shipping and packing replace the lane's,
+    // a return rate (percent) may only raise it. `lane` is the lane each one belongs to.
+    profiles: {
+      "gaming laptop": { lane: "PC", ship: 32, pack: 8, ret: 9 },
+      "mini pc": { lane: "PC", ship: 14, pack: 4 },
+      "switch": { lane: "Console", ship: 12, pack: 3 },
+      "imac": { lane: "MacBook", ship: 55, pack: 15, ret: 8 },
+      "mac studio": { lane: "MacBook", ship: 28, pack: 8 },
+      "mac pro": { lane: "MacBook", ship: 95, pack: 25 },
+    },
     relistHaircut: 0.05, launchHaircut: 0.12, minComps: 5, minSale: 150, baseMargin: 25,
     capital: 2500, unitShare: 0.25,
   };
@@ -263,13 +281,19 @@
 
   // rule(input) -> the same fields as valuation.evaluate. Fractions in, fractions out (0.30 not 30).
   // input: comps[], ask, lane, channel ("ebay"|"swappa"), store, adRate, buyerTax, shipCost, packaging,
-  //        returnRate, targetMargin, launchSoon, capital
+  //        returnRate, targetMargin, launchSoon, capital, profile (a CFG.profiles key of this lane)
+  function laneCosts(lane, profile) {
+    const p = CFG.profiles[profile];
+    const own = p && p.lane === lane ? p : {};
+    return { ship: own.ship ?? CFG.ship[lane], pack: own.pack ?? CFG.pack[lane], ret: Math.max(CFG.ret[lane], own.ret ?? 0) };
+  }
   function rule(i) {
     const comps = i.comps || []; if (!comps.length) return null;
     const lane = i.lane, swappa = i.channel === "swappa", store = i.store !== false;
     const adRate = i.adRate ?? CFG.adRate, buyerTax = i.buyerTax ?? CFG.buyerTax;
-    const ship = i.shipCost ?? CFG.ship[lane], pack = i.packaging ?? CFG.pack[lane];
-    const rr = i.returnRate ?? CFG.ret[lane] / 100, target = i.targetMargin ?? CFG.baseMargin / 100;
+    const base = laneCosts(lane, i.profile);
+    const ship = i.shipCost ?? base.ship, pack = i.packaging ?? base.pack;
+    const rr = i.returnRate ?? base.ret / 100, target = i.targetMargin ?? CFG.baseMargin / 100;
     const cap = (i.capital ?? CFG.capital) * CFG.unitShare;
     let pct, fixed;
     if (swappa) { pct = CFG.swappaRate; fixed = CFG.swappaFixed; }
@@ -324,8 +348,32 @@
       ["Activation Lock off, Find My Mac disabled", "Recovery must not ask for the previous owner's Apple ID"],
       ["About This Mac matches: chip, RAM, SSD, year", ""],
       ["Cycle count checked (laptops)", "System Information > Power; over 800 means a battery service is coming"],
-      ["Keys and trackpad (laptops), every port, display, speakers", "Mac mini: HDMI out, Ethernet, fan, power cord included"],
+      ["Keys and trackpad (laptops), every port, display, speakers", "Mac mini, Studio, Pro: HDMI out, Ethernet, fan, power cord included; iMac: screen on white"],
       ["No liquid damage; serial checked at checkcoverage.apple.com", "Corrosion at ports, warped case, sticky keys"],
+    ],
+    Android: [
+      ["Google and Samsung accounts removed, then reset", "Setup must not ask for the previous owner's Google account (FRP)"],
+      ["No managed-device or Knox Guard screen", "A company-enrolled phone cannot be cleared by a reset"],
+      ["IMEI is clean", "*#06#; blacklist, carrier lock and unpaid balance checked"],
+      ["US model of the row: ends in U or U1", "Settings > About phone; B is international, FE and Edge are other phones"],
+      ["No burn-in or lines; fingerprint, cameras, mics, speaker, port", "Solid gray screen at full brightness; Ultra: S Pen writes"],
+      ["About phone and IMEI photographed", "Before paying"],
+    ],
+    Console: [
+      ["Powers on and plays 5 minutes", "No shutdown, grinding fan or loud whine; a disc reads and ejects"],
+      ["Model matches the row", "Disc or digital, original, Slim or Pro, Series X not S, OLED not Lite, Switch 2"],
+      ["Released by the seller, not banned", "Account removed or console reset; it reaches its store"],
+      ["Serial on the box matches the console", "A mismatched box hides a swapped unit"],
+      ["Controllers: buttons, no stick drift, triggers, charging", "Switch: Joy-Con attach and the dock outputs to a TV"],
+      ["Power and HDMI cables and a controller included", "Price each missing piece in"],
+    ],
+    Watch: [
+      ["Unpaired in front of you, no Activation Lock", "Still paired or asks for an Apple ID: walk"],
+      ["Model, case size, metal and GPS or cellular match", "Settings > General > About and the case back"],
+      ["Pairs through the iPhone Watch app; serial checks out", "A watch that needs a third-party app is a clone"],
+      ["Battery health 85% or better", "Settings > Battery > Battery Health"],
+      ["Screen, Digital Crown, side button, heart rate sensor", "Touch across the whole screen"],
+      ["Charger included", "Bands are not part of the row"],
     ],
   };
 
@@ -353,6 +401,21 @@
       ["Defect exactly known and photographed", ""],
       ["Parts value checked: screen, board, RAM, SSD", ""],
     ],
+    Android: [
+      ["Google and Samsung accounts removed (no FRP)", "A locked broken unit is worth almost nothing"],
+      ["IMEI is clean", "Blacklisted units are not sold, even for parts"],
+      ["Defect exactly known and photographed", ""],
+    ],
+    Console: [
+      ["Not banned, seller's account removed", "If it powers on; otherwise price as a board"],
+      ["Defect exactly known and photographed", "No power, no picture, disc drive, HDMI port"],
+      ["Parts value checked: board, drive, controller", ""],
+    ],
+    Watch: [
+      ["Activation Lock is off", "A locked watch is worth almost nothing"],
+      ["Defect exactly known and photographed", ""],
+      ["Buyback quote captured as the floor", ""],
+    ],
   };
 
   const $ = (id) => document.getElementById(id);
@@ -362,8 +425,19 @@
   function setLane(lane) {
     state.lane = lane;
     document.querySelectorAll(".lanes button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lane === lane)));
-    $("ship").value = CFG.ship[lane]; $("pack").value = CFG.pack[lane]; $("ret").value = CFG.ret[lane];
-    renderGates(); applyParams();
+    const sel = $("profile"), mine = Object.keys(CFG.profiles).filter((k) => CFG.profiles[k].lane === lane);
+    const plain = { PC: "a laptop", MacBook: "a MacBook or Mac mini", Console: "a PS5 or Xbox" }[lane] || "its lane";
+    sel.innerHTML = `<option value="">${plain}</option>` + mine.map((k) => `<option value="${k}">${k}</option>`).join("");
+    $("profile-row").hidden = !mine.length;
+    renderGates();
+    setProfile();
+  }
+  // The family's shipping, packing and return rate (ADR-245), then any learned rule on top of them. The gates are the
+  // lane's whatever the profile, so changing it keeps the boxes already ticked.
+  function setProfile() {
+    const c = laneCosts(state.lane, $("profile").value);
+    $("ship").value = c.ship; $("pack").value = c.pack; $("ret").value = c.ret;
+    applyParams();
   }
 
   function activeGates() { return ($("parts").checked ? PARTS_GATES : GATES)[state.lane]; }
@@ -395,7 +469,8 @@
     if (d) {
       const tm = ((d.target_margin || {})[lane] || {})[fam], rr = ((d.return_rate || {})[lane] || {})[src];
       $("margin").value = tm != null ? Math.max(CFG.baseMargin, +(tm * 100).toFixed(2)) : CFG.baseMargin;
-      $("ret").value = rr != null ? Math.max(CFG.ret[lane], +(rr * 100).toFixed(2)) : CFG.ret[lane];
+      const floor = laneCosts(lane, $("profile").value).ret;
+      $("ret").value = rr != null ? Math.max(floor, +(rr * 100).toFixed(2)) : floor;
       note = `params ${d.version || "unversioned"}: margin ${$("margin").value}% (${tm != null ? "learned" : fam ? "no rule for " + fam : "enter the family"}), return ${$("ret").value}% (${rr != null ? "learned for " + src : "lane default"})`;
     }
     $("params-note").textContent = note; compute();
@@ -472,6 +547,7 @@
   }
 
   document.querySelectorAll(".lanes button").forEach((b) => b.addEventListener("click", () => setLane(b.dataset.lane)));
+  $("profile").addEventListener("change", setProfile);
   ["comps", "ask", "margin", "ads", "ship", "pack", "ret", "tax", "capital"].forEach((id) => $(id).addEventListener("input", compute));
   ["launch", "channel"].forEach((id) => $(id).addEventListener("change", compute));
   $("params").addEventListener("input", applyParams);
