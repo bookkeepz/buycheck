@@ -164,7 +164,7 @@
       <summary>Assumptions</summary>
       <div class="row">
         <label for="margin">Required margin, % of sale price<span class="hint">Rises automatically with fewer than 5 comps or a wide spread</span></label>
-        <input id="margin" type="number" inputmode="decimal" min="0" max="90" step="1" value="30">
+        <input id="margin" type="number" inputmode="decimal" min="0" max="90" step="1" value="25">
       </div>
       <div class="row">
         <label for="capital">Bankroll $<span class="hint">No single unit may cost more than 25% of it</span></label>
@@ -404,6 +404,18 @@
   function isStale() {
     const d = paramsState.data, fam = $("family").value.trim();
     return !!(d && fam && (((d.stale || {})[state.lane]) || []).includes(fam));
+  }
+
+  // The comps field: sold prices separated by spaces, commas or semicolons. "$1,099" and "12,500.50" read as one
+  // price (one thousands comma after one or two digits); "505,520" is two; anything not a positive number is skipped.
+  function parseComps() {
+    const out = [];
+    for (const tok of ($("comps").value || "").split(/[\s;]+/)) {
+      const t = tok.replace(/\$/g, "");
+      const parts = /^\d{1,2},\d{3}(\.\d+)?$/.test(t) ? [t.replace(/,/g, "")] : t.split(",");
+      for (const x of parts) if (/^\d+(\.\d+)?$/.test(x) && +x > 0) out.push(+x);
+    }
+    return out;
   }
 
   function ruleInput() {
